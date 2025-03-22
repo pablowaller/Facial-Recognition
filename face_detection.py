@@ -5,8 +5,9 @@ import cv2
 import numpy as np
 import face_recognition
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
+import urllib.parse
 
 cred = credentials.Certificate("firebase_credentials.json")  
 firebase_admin.initialize_app(cred, {
@@ -16,6 +17,10 @@ firebase_admin.initialize_app(cred, {
 
 bucket = storage.bucket()
 
+last_detection_time = {}
+
+DETECTION_INTERVAL = 300 
+
 def download_images_from_firebase():
     blobs = bucket.list_blobs(prefix="photos/")  
     images = []
@@ -23,8 +28,8 @@ def download_images_from_firebase():
 
     for blob in blobs:
         if blob.name.endswith(('.jpg', '.png', '.jpeg')):
-
-            url = f"https://firebasestorage.googleapis.com/v0/b/sense-bell.firebasestorage.app/o/{blob.name.replace('/', '%2F')}?alt=media"
+            encoded_name = urllib.parse.quote(blob.name, safe='')  # Mueve esto dentro del bucle
+            url = f"https://firebasestorage.googleapis.com/v0/b/sense-bell.firebasestorage.app/o/{encoded_name}?alt=media"
             try:
                 resp = urllib.request.urlopen(url)
                 img_array = np.asarray(bytearray(resp.read()), dtype=np.uint8)
@@ -52,7 +57,6 @@ def findEncodings(images):
 encodeListKnown = findEncodings(images)
 print("🔹 Codificación facial completada.")
 
-
 url = 'http://192.168.0.145/stream'  
 cap = cv2.VideoCapture(url)
 
@@ -68,15 +72,19 @@ if not os.path.exists(attendance_file):
     print("🔹 Archivo de asistencia creado.")
 
 def markAttendance(name):
-    with open(attendance_file, 'r+') as f:
-        data = f.readlines()
-        nameList = [line.split(',')[0] for line in data]
-        if name not in nameList:
-            now = datetime.now()
-            timeString = now.strftime('%H:%M:%S')
-            f.write(f'{name},{timeString}\n')
-            print(f"✅ Asistencia registrada para {name} a las {timeString}")
-            markAttendanceInFirebase(name, timeString)
+    now = datetime.now()
+    if name in last_detection_time:
+        time_elapsed = now - last_detection_time[name]
+        if time_elapsed.total_seconds() < DETECTION_INTERVAL:
+            return
+
+    timeString = now.strftime('%H:%M:%S')
+    with open(attendance_file, 'a') as f:
+        f.write(f'{name},{timeString}\n')
+    print(f"✅ Asistencia registrada para {name} a las {timeString}")
+    markAttendanceInFirebase(name, timeString)
+
+    last_detection_time[name] = now
 
 def markAttendanceInFirebase(name, timestamp):
     url = "https://sense-bell-default-rtdb.firebaseio.com/attendance.json"
