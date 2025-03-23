@@ -86,17 +86,35 @@ def markAttendance(name):
 
     last_detection_time[name] = now
 
+
+def get_priority_from_firebase(name):
+    visitors_url = "https://sense-bell-default-rtdb.firebaseio.com/visitors.json"
+    try:
+        response = requests.get(visitors_url)
+        if response.status_code == 200:
+            visitors_data = response.json()
+            for key, visitor in visitors_data.items():
+                if visitor.get("name") == name:
+                    return visitor.get("priority", 0)  
+        else:
+            print(f"❌ Error al obtener visitantes: {response.text}")
+    except Exception as e:
+        print(f"❌ Error en get_priority_from_firebase: {e}")
+    return 0
+
 def markAttendanceInFirebase(name, timestamp):
+    priority = get_priority_from_firebase(name)
     url = "https://sense-bell-default-rtdb.firebaseio.com/attendance.json"
     data = {
         "name": name,
         "timestamp": timestamp,
+        "priority": priority,
         "message": f"{name} está en la puerta!"
     }
     response = requests.post(url, json=data)
     
     if response.status_code == 200:
-        print(f"✅ Asistencia subida a Firebase para {name}")
+        print(f"✅ Asistencia subida a Firebase para {name} con prioridad {priority}")
     else:
         print(f"❌ Error subiendo asistencia a Firebase: {response.text}")
 
