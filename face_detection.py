@@ -10,6 +10,7 @@ from datetime import datetime
 import requests
 import urllib.parse
 import time
+import re
 
 cred = credentials.Certificate("firebase_credentials.json")
 firebase_admin.initialize_app(cred, {
@@ -29,6 +30,26 @@ UPDATE_INTERVAL = 30
 bucket = storage.bucket()
 DETECTION_INTERVAL = 300
 last_detection_time = {}
+
+
+last_print_time = {}
+
+def clean_print_name(name):
+    """Limpia el nombre para imprimir eliminando números y caracteres especiales"""
+    decoded_name = urllib.parse.unquote(name)
+    cleaned = re.sub(r'[^a-zA-ZáéíóúÁÉÍÓÚñÑ\s]', '', decoded_name)
+    cleaned = ' '.join(word.capitalize() for word in cleaned.split())
+    return cleaned if cleaned.strip() else "Desconocido"
+
+
+def clean_display_name(name):
+    """Limpia el nombre para mostrar eliminando caracteres especiales y números"""
+
+    decoded_name = urllib.parse.unquote(name)
+    
+    cleaned_name = ''.join([c for c in decoded_name if c.isalpha() or c.isspace()])
+    
+    return cleaned_name if cleaned_name.strip() else "Desconocido"
 
 def get_esp32cam_url():
     """Obtiene la URL del stream de la ESP32-CAM desde Firebase"""
@@ -68,13 +89,11 @@ def initialize_video_source(choice):
         stream_url = get_esp32cam_url()
         print(f"🔗 Intentando conectar a: {stream_url}")
         
-        # Try opening with OpenCV first
         cap = cv2.VideoCapture(stream_url)
         if cap.isOpened():
             print("✅ Transmisión de ESP32-CAM iniciada con OpenCV.")
             return cap, 'ESP32-CAM Reconocimiento Facial'
         
-        # If OpenCV fails, try with urllib
         try:
             resp = urllib.request.urlopen(stream_url)
             bytes = bytes()
@@ -154,21 +173,24 @@ if not os.path.exists(attendance_file):
 
 def markAttendance(name):
     """Registra la asistencia con control de intervalo"""
+    # Convertir el nombre a minúsculas para consistencia
+    normalized_name = name.lower()
+    
     now = datetime.now()
-    if name in last_detection_time:
-        time_elapsed = now - last_detection_time[name]
+    if normalized_name in last_detection_time:
+        time_elapsed = now - last_detection_time[normalized_name]
         if time_elapsed.total_seconds() < DETECTION_INTERVAL:
             return
 
     timeString = now.strftime('%H:%M:%S')
     with open(attendance_file, 'a') as f:
-        f.write(f'{name},{timeString}\n')
-    print(f"✅ Asistencia registrada para {name} a las {timeString}")
+        f.write(f'{normalized_name},{timeString}\n')
+    print(f"✅ Asistencia registrada para {normalized_name} a las {timeString}")
     
-    markAttendanceInFirebase(name, timeString)
-    activatePriorityForVisitor(name)
+    markAttendanceInFirebase(normalized_name, timeString)
+    activatePriorityForVisitor(normalized_name)
 
-    last_detection_time[name] = now
+    last_detection_time[normalized_name] = now
 
 def markAttendanceInFirebase(name, timestamp):
     """Envía la asistencia a Firebase"""
@@ -191,7 +213,8 @@ def activatePriorityForVisitor(name):
     """Activa la prioridad según el visitante"""
     try:
         priority = get_priority_from_firebase(name)
-        print(f"⚡ Activando prioridad: {priority} para {name}")
+        print(f"⚡ Prioridad obtenida para {name}: {priority}")
+        
         priority_low_ref.set(False)
         priority_medium_ref.set(False)
         priority_high_ref.set(False)
@@ -206,35 +229,52 @@ def activatePriorityForVisitor(name):
             priority_high_ref.set(True)
             print("🟢 Prioridad Alta activada")
         else:
-            print("ℹ️ Prioridad no definida, usando baja por defecto")
+            print(f"⚠️ Prioridad no reconocida: {priority}, usando baja por defecto")
             priority_low_ref.set(True)
     except Exception as e:
         print(f"❌ Error al activar prioridad: {e}")
         priority_low_ref.set(True)
 
+def clean_name_for_comparison(name):
+    """Limpia el nombre para comparación eliminando caracteres especiales, números y normalizando mayúsculas"""
+    cleaned = re.sub(r'[^a-zA-ZáéíóúÁÉÍÓÚñÑ\s]', '', name.lower())
+    cleaned = ' '.join(cleaned.split())
+    return cleaned
+
 def get_priority_from_firebase(name):
-    """Obtiene la prioridad desde Firebase"""
+    """Obtiene la prioridad desde Firebase con comparación flexible de nombres"""
     print(f"🔍 Buscando prioridad para: {name}") 
     visitors_url = "https://sense-bell-default-rtdb.firebaseio.com/visitors.json"
     try:
         response = requests.get(visitors_url)
         if response.status_code == 200:
             visitors_data = response.json() or {}
-            for visitor in visitors_data.values():
-                if visitor.get("name") == name:
-                    priority = visitor.get("priority", "medium").lower()  
-                    print(f"DEBUG: Prioridad encontrada para {name}: {priority}")  
+            
+            # Limpiar el nombre buscado
+            search_name = clean_name_for_comparison(name)
+
+            for visitor_id, visitor in visitors_data.items():
+                visitor_name = clean_name_for_comparison(visitor.get("name", ""))
+                if visitor_name == search_name:
+                    priority = visitor.get("priority", "medium").lower()
+                    print(f"DEBUG: Prioridad encontrada para {name}: {priority}")
+                    
                     if priority in ["low", "medium", "high"]:
                         return priority
-                    return "medium" 
-        return "low"  
+                    return "medium"  
+            
+            print(f"DEBUG: No se encontró visitante con nombre normalizado '{search_name}'")
+            return "low"  
+        
+        print(f"DEBUG: Error en la respuesta de Firebase: {response.status_code}")
+        return "low"
     except Exception as e:
         print(f"❌ Error en get_priority_from_firebase: {e}")
         return "low"
 
 def process_frame(frame):
     """Procesa cada frame del video"""
-    global encodeListKnown, classNames, last_update_time
+    global encodeListKnown, classNames, last_update_time, last_print_time
     
     if (time.time() - last_update_time > UPDATE_INTERVAL) or (new_face_ref.get() is True):
         try:
@@ -263,24 +303,36 @@ def process_frame(frame):
 
         if matchIndex is not None and matches[matchIndex]:
             name = classNames[matchIndex].upper()
-            decoded_name = urllib.parse.unquote(name)
             
             # Dibujar rectángulo y nombre siempre que se detecte la cara
             y1, x2, y2, x1 = faceLoc
             y1, x2, y2, x1 = y1 * 4, x2 * 4, y2 * 4, x1 * 4
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.rectangle(frame, (x1, y2 - 35), (x2, y2), (0, 255, 0), cv2.FILLED)
-            cv2.putText(frame, decoded_name, (x1 + 6, y2 - 6), cv2.FONT_HERSHEY_COMPLEX, 1, (255, 255, 255), 2)
-
-            # Solo registrar asistencia si ha pasado el intervalo
-            now = datetime.now()
-            if decoded_name in last_detection_time:
-                time_elapsed = (now - last_detection_time[decoded_name]).total_seconds()
-                if time_elapsed < DETECTION_INTERVAL:
-                    continue  
             
-            print(f"👤 Persona detectada: {decoded_name}")  
-            markAttendance(decoded_name)
+            # Limpiar el nombre para mostrar
+            display_name = clean_display_name(name)
+            cv2.putText(frame, display_name, (x1 + 6, y2 - 6), cv2.FONT_HERSHEY_COMPLEX, 1, (255, 255, 255), 2)
+
+            # Control de tiempo para no spamear mensajes
+            now = datetime.now()
+            normalized_name = clean_name_for_comparison(name)
+            
+            # Verificar si debemos imprimir el mensaje
+            should_print = True
+            if normalized_name in last_print_time:
+                time_elapsed = (now - last_print_time[normalized_name]).total_seconds()
+                should_print = time_elapsed >= 300  # 5 minutos = 300 segundos
+            
+            if should_print:
+                print_name = clean_print_name(name)
+                print(f"👤 Persona detectada: {print_name}")  
+                last_print_time[normalized_name] = now
+                
+                # Solo registrar asistencia si ha pasado el intervalo completo
+                if normalized_name not in last_detection_time or \
+                   (now - last_detection_time.get(normalized_name, now)).total_seconds() >= DETECTION_INTERVAL:
+                    markAttendance(name)
 
     return frame
 
