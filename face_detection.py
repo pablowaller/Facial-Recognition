@@ -107,7 +107,6 @@ def initialize_video_source(choice):
                     img = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
                     if img is not None:
                         print("✅ Transmisión de ESP32-CAM iniciada con urllib.")
-                        # Create a dummy VideoCapture object
                         cap = cv2.VideoCapture()
                         cap.set(cv2.CAP_PROP_FRAME_WIDTH, img.shape[1])
                         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, img.shape[0])
@@ -210,11 +209,12 @@ def markAttendanceInFirebase(name, timestamp):
         print(f"❌ Error de conexión con Firebase: {e}")
 
 def activatePriorityForVisitor(name):
-    """Activa la prioridad según el visitante"""
+    """Activa la prioridad según el visitante y la resetea después de 10 segundos"""
     try:
         priority = get_priority_from_firebase(name)
         print(f"⚡ Prioridad obtenida para {name}: {priority}")
         
+        # Primero, resetear todas las prioridades
         priority_low_ref.set(False)
         priority_medium_ref.set(False)
         priority_high_ref.set(False)
@@ -231,6 +231,15 @@ def activatePriorityForVisitor(name):
         else:
             print(f"⚠️ Prioridad no reconocida: {priority}, usando baja por defecto")
             priority_low_ref.set(True)
+
+        def reset_priority():
+            priority_low_ref.set(False)
+            priority_medium_ref.set(False)
+            priority_high_ref.set(False)
+            print("⏳ Prioridad reseteada después de 10 segundos.")
+
+        threading.Timer(10, reset_priority).start()
+
     except Exception as e:
         print(f"❌ Error al activar prioridad: {e}")
         priority_low_ref.set(True)
