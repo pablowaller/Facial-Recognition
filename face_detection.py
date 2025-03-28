@@ -209,40 +209,38 @@ def markAttendanceInFirebase(name, timestamp):
         print(f"❌ Error de conexión con Firebase: {e}")
 
 def activatePriorityForVisitor(name):
-    """Activa la prioridad según el visitante y la resetea después de 10 segundos"""
+    """Activa la prioridad según el visitante"""
     try:
         priority = get_priority_from_firebase(name)
-        print(f"⚡ Prioridad obtenida para {name}: {priority}")
+        print(f"⚡ Activando prioridad {priority} para {name}")
         
-        # Primero, resetear todas las prioridades
-        priority_low_ref.set(False)
-        priority_medium_ref.set(False)
-        priority_high_ref.set(False)
+        # Crear objeto de actualización atómica
+        updates = {
+            "priority_low": False,
+            "priority_medium": False,
+            "priority_high": False
+        }
         
         if priority == 'low':
-            priority_low_ref.set(True)
-            print("🔴 Prioridad Baja activada")
+            updates["priority_low"] = True
         elif priority == 'medium':
-            priority_medium_ref.set(True)
-            print("🟡 Prioridad Media activada")
+            updates["priority_medium"] = True
         elif priority == 'high':
-            priority_high_ref.set(True)
-            print("🟢 Prioridad Alta activada")
+            updates["priority_high"] = True
         else:
-            print(f"⚠️ Prioridad no reconocida: {priority}, usando baja por defecto")
-            priority_low_ref.set(True)
+            updates["priority_low"] = True  #
 
-        def reset_priority():
-            priority_low_ref.set(False)
-            priority_medium_ref.set(False)
-            priority_high_ref.set(False)
-            print("⏳ Prioridad reseteada después de 10 segundos.")
-
-        threading.Timer(10, reset_priority).start()
+        db.reference('doorbell').update(updates)
+        print(f"✅ Prioridad {priority} activada en Firebase")
+        
+        threading.Timer(10, lambda: db.reference('doorbell').update({
+            "priority_low": False,
+            "priority_medium": False,
+            "priority_high": False
+        })).start()
 
     except Exception as e:
         print(f"❌ Error al activar prioridad: {e}")
-        priority_low_ref.set(True)
 
 def clean_name_for_comparison(name):
     """Limpia el nombre para comparación eliminando caracteres especiales, números y normalizando mayúsculas"""
